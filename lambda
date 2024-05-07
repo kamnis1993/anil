@@ -1,0 +1,256 @@
+import boto3
+import json
+import sys
+import os
+def CW_Alarms(in_id, pr_env, sns_topic,region):
+
+    cloudwatch = boto3.client('cloudwatch', region)
+    ec2 = boto3.client('ec2', region)
+
+    reservations = ec2.describe_instances(InstanceIds=[in_id])
+
+    for r in reservations['Reservations']:
+        for i in r['Instances']:
+            instance_id = i['InstanceId']
+            private_ip = i['PrivateIpAddress']
+            image_id = i['ImageId']
+            instance_type = i['InstanceType']
+            if i['InstanceId'] == in_id:
+                servername_id = instance_id
+                #print(servername_id )
+                for t in i['Tags']:
+                    if t['Key'] == 'Name':
+                        instance_name = (t["Value"])
+                #print("instance_id ", instance_id, " private_ip "private_ip," instance_type ",instance_type )          
+
+    # Common Variables
+    servername = pr_env+" "+instance_name+" "+private_ip
+    print("Instance: ",instance_id," ",servername," ",private_ip)  
+    CriticalEmailAlarmAction=[
+        sns_topic
+    ]
+    recover = "arn:aws:automate:"+region+":ec2:recover"
+    AlarmActionRecover = [
+        sns_topic,
+        recover
+    ]
+    reboot = "arn:aws:automate:"+region+":ec2:reboot"
+    AlarmActionReboot = [
+        sns_topic,
+        reboot
+    ]
+#----------------------------------------------------
+    # This is for the StatusCheckFailed_Instance State on EC2s
+    InstanceFailureAlarmname = "Critical - Instance Status Check Failure on "+ servername
+    InstanceMetric = "StatusCheckFailed_Instance"
+    InstanceThreshold = 1
+    InstancePeriod = 60
+    InstanceDimension = [{
+        'Name': "InstanceId",
+        'Value': instance_id
+    }]
+    # Create the Instance Failure Alarm
+    response = cloudwatch.put_metric_alarm(
+        AlarmName=InstanceFailureAlarmname,
+        AlarmDescription='Instance failure detection',
+        ActionsEnabled=True,
+        AlarmActions=AlarmActionReboot,
+        MetricName=InstanceMetric,
+        Namespace="AWS/EC2",
+        Statistic='Average',
+        Dimensions=InstanceDimension,
+        Period=InstancePeriod,
+        EvaluationPeriods=1,
+        Threshold=InstanceThreshold,
+        ComparisonOperator='GreaterThanOrEqualToThreshold'          
+    )
+    print("Created: "+InstanceFailureAlarmname )
+
+    # This is for the StatusCheckFailed_System  State on Windows Servers
+    SystemFailureAlarmname = "Critical - System Status Check Failure on "+ servername
+    InstanceMetric = "StatusCheckFailed_System"
+    InstanceThreshold = 1
+    InstancePeriod = 60
+    InstanceDimension = [{
+        'Name': "InstanceId",
+        'Value': instance_id
+    }]
+
+    # Create the StatusCheckFailed_System Failure Alarm
+    response = cloudwatch.put_metric_alarm(
+        AlarmName=SystemFailureAlarmname,
+        AlarmDescription='Instance StatusCheckFailed_System detection with recover',
+        ActionsEnabled=True,
+        AlarmActions=AlarmActionRecover,
+        MetricName=InstanceMetric,
+        Namespace="CWAgent",
+        Statistic='Average',
+        Dimensions=InstanceDimension,
+        Period=InstancePeriod,
+        EvaluationPeriods=1,
+        Threshold=InstanceThreshold,
+        ComparisonOperator='GreaterThanOrEqualToThreshold'
+    )
+    print("Created: "+SystemFailureAlarmname )
+#---------------------------------------------------#
+    # This is for the CPU metrics on Windows Servers
+    CPUMetric = "CPUUtilization"
+    CPUThreshold = 90
+    CPUPeriod = 3600
+    CriticalCPUAlarmName = "Critical - CPU 90% on "+ servername  
+    CPUDimension = [{
+        'Name': "InstanceId",
+        'Value': instance_id
+    }]
+    CPUUnit = 'Percent'
+
+    # Create the CPU Alarm
+    response = cloudwatch.put_metric_alarm(
+        AlarmName=CriticalCPUAlarmName,
+        AlarmDescription='Server with high CPU',
+        ActionsEnabled=True,
+        AlarmActions=CriticalEmailAlarmAction,
+        MetricName=CPUMetric,
+        Namespace="AWS/EC2",
+        Statistic='Average',
+        Dimensions=CPUDimension,                    
+        Period=CPUPeriod,
+        EvaluationPeriods=1,
+        Threshold=CPUThreshold,
+        ComparisonOperator='GreaterThanOrEqualToThreshold'
+        #Unit=CPUUnit
+    )
+    print("Created: "+CriticalCPUAlarmName )
+
+
+    # This is for the memory metrics on Linux Servers
+    CriticalMemoryAlarmName = "Critical - Memory 90% on "+servername  
+    MemoryMetric = "mem_used_percent"
+    MemoryThreshold = 90# in percentage
+    MemoryUnit = 'Percent'
+    MemoryDimension = [{
+        'Name': "InstanceId",
+        'Value': instance_id
+    },
+    {
+        'Name': "ImageId",
+        'Value': image_id
+    },
+    {
+        'Name': "InstanceType",
+        'Value': instance_type
+    }]
+    MemoryPeriod = 300
+
+
+    # Create the critical memory Linux Alarm
+    response = cloudwatch.put_metric_alarm(
+        AlarmName=CriticalMemoryAlarmName,
+        AlarmDescription='Server with high Memory usage',
+        ActionsEnabled=True,
+        AlarmActions=CriticalEmailAlarmAction,
+        MetricName=MemoryMetric,
+        Namespace="AWS/EC2",
+        Statistic='Average',
+        Dimensions=MemoryDimension,
+        Period=MemoryPeriod,
+        EvaluationPeriods=1,
+        Threshold=MemoryThreshold,
+        ComparisonOperator='GreaterThanOrEqualToThreshold'
+        #Unit=MemoryUnit
+    )
+    print("Created: "+CriticalMemoryAlarmName )
+   
+
+    # This is for the Disk metrics on Linux Servers
+    DiskMetric = "disk_used_percent"
+    DiskThreshold = 10  # in percentage
+    DiskPeriod = 300
+    DiskUnit = 'Percent'
+    DiskDimension = [
+    {
+        'Name': 'InstanceId',
+        'Value': instance_id
+    },
+    {
+        'Name': 'ImageId',
+        'Value': image_id
+    },
+    {
+        'Name': 'InstanceType',
+        'Value': instance_type
+    }]
+   
+    # Create the Disk space Alarms
+    responses = cloudwatch.list_metrics(
+     Namespace="CWAgent",
+     Dimensions=DiskDimension
+)
+
+    for response in responses["Metrics"]:
+     metricName = response["MetricName"]
+     DiskDimensions = response["Dimensions"]
+     for d in response['Dimensions']:
+        if d['Name'] == 'path':
+            mountpath = (d["Value"])
+            if (mountpath == '/' or mountpath == '/home' or mountpath =='/var' or mountpath == '/usr'):
+                LogicalDiskAlarmName = "Critical - Disk "  + mountpath + " 60% on " + servername
+                # Create disk Alarm
+                if metricName == "disk_used_percent":
+                    print("Creating Alarm for:", LogicalDiskAlarmName)
+                    print("Dimensions for Alarm:", DiskDimensions)
+                    response = cloudwatch.put_metric_alarm(
+                        AlarmName=LogicalDiskAlarmName,
+                        AlarmDescription='Server Disk Space usage',
+                        ActionsEnabled=True,
+                        AlarmActions=CriticalEmailAlarmAction,
+                        MetricName="disk_used_percent",
+                        Namespace="CWAgent",
+                        Statistic='Average',
+                        Dimensions=DiskDimensions,
+                        Period=DiskPeriod,
+                        EvaluationPeriods=1,
+                        Threshold=DiskThreshold,
+                        ComparisonOperator='GreaterThanOrEqualToThreshold',
+                    )
+                    print("Created:", LogicalDiskAlarmName)
+
+         
+   
+
+def lambda_handler(event, context):
+    print ("In Lambda Handler")
+    if 'SNS_TOPIC' not in os.environ:
+        print("Error: SNS_TOPIC")
+        return
+    elif 'ENVIRONMENT' not in os.environ:
+        print("Error: ENVIRONMENT")
+        return
+    elif 'REGION' not in os.environ:
+        print("Error: REGION")
+        return
+    sns_topic=os.environ["SNS_TOPIC"]
+    pr_env=os.environ["ENVIRONMENT"]
+    region=os.environ["REGION"]
+    # Get information for all running instances
+    try:
+        ec2 = boto3.resource('ec2')
+        instances = ec2.instances.filter(
+            Filters=[{'Name': 'instance-state-name', 'Values': ['running']}])
+
+        # count=0
+        # for instance in instances:
+        #     for t in instance.tags:
+        #         if t['Key'] == 'Name':
+        #             instance_name = (t["Value"])  
+        #             #print(pr_env, " ", instance_name)
+        #             if instance.platform != "windows":
+        #                 #print(instance.id,instance.platform, instance.instance_type)
+        #                 CW_Alarms(instance.id, pr_env, sns_topic,region)
+        #                 #print(instance_name)
+
+        #     count = count+1
+        # print("Total EC2s: ", count)    
+
+        CW_Alarms("i-0e6f6531a9d0ea682", pr_env, sns_topic,region)
+#        return
