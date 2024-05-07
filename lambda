@@ -252,5 +252,5 @@ def lambda_handler(event, context):
         #     count = count+1
         # print("Total EC2s: ", count)    
 
-        CW_Alarms("i-0e6f6531a9d0ea682", pr_env, sns_topic,region)
+        CW_Alarms("i-0cdf274e5f3683be9", pr_env, sns_topic,region)
 #        return
